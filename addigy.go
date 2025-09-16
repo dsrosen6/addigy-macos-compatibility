@@ -42,11 +42,12 @@ type addigyPolicy struct {
 }
 
 type addigyDevice struct {
-	AgentID       string                      `json:"agentid"`
-	Facts         map[string]addigyDeviceFact `json:"facts"`
-	name          string
-	hardwareModel string
-	policy        addigyPolicy
+	AgentID            string                      `json:"agentid"`
+	Facts              map[string]addigyDeviceFact `json:"facts"`
+	name               string
+	hardwareModel      string
+	policy             addigyPolicy
+	latestCompatibleOS string
 }
 
 type addigyClient struct {
@@ -61,7 +62,7 @@ func newAddigyClient(httpClient *http.Client, apiKey string) *addigyClient {
 	}
 }
 
-func (a *addigyClient) processDeviceData(ctx context.Context, device *addigyDevice) (*addigyDevice, error) {
+func (a *addigyClient) processDeviceData(ctx context.Context, sofaData *sofaData, device *addigyDevice) (*addigyDevice, error) {
 	policyID, ok := device.Facts["policy_id"].Value.(string)
 	if !ok {
 		return nil, fmt.Errorf("getting policy id")
@@ -73,6 +74,9 @@ func (a *addigyClient) processDeviceData(ctx context.Context, device *addigyDevi
 
 	if device.hardwareModel, ok = device.Facts["hardware_model"].Value.(string); !ok {
 		device.hardwareModel = "Unknown"
+		device.latestCompatibleOS = "No Model ID"
+	} else {
+		device.latestCompatibleOS = getLatestCompatible(sofaData, device.hardwareModel)
 	}
 
 	var err error

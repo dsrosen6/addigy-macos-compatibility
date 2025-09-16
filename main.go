@@ -38,11 +38,11 @@ func runReport() error {
 	}
 
 	for _, d := range devices {
-		device, err := addigyClient.processDeviceData(ctx, &d)
+		device, err := addigyClient.processDeviceData(ctx, sofaData, &d)
 		if err != nil {
 			return fmt.Errorf("processing data for device %s: %w", d.name, err)
 		}
-		fmt.Printf("%s - Policy Name: %s\n", device.name, device.policy.Name)
+		fmt.Printf("%s - Policy Name: %s, Compatible With: %s\n", device.name, device.policy.Name, device.latestCompatibleOS)
 	}
 	fmt.Printf("Found %d devices\n", len(devices))
 	return nil

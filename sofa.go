@@ -12,14 +12,14 @@ const (
 	sofaDataURL = "https://sofafeed.macadmins.io/v1/macos_data_feed.json"
 )
 
-type sofaMacModel struct {
+type macModel struct {
 	MarketingName string   `json:"MarketingName"`
 	SupportedOS   []string `json:"SupportedOS"`
 	OSVersions    []int    `json:"OSVersions"`
 }
 
 type sofaData struct {
-	Models map[string]sofaMacModel `json:"Models"`
+	Models map[string]macModel `json:"Models"`
 }
 
 func getSofaData(ctx context.Context, httpClient *http.Client) (*sofaData, error) {
@@ -44,4 +44,12 @@ func getSofaData(ctx context.Context, httpClient *http.Client) (*sofaData, error
 	}
 
 	return data, nil
+}
+
+func getLatestCompatible(s *sofaData, hwModel string) string {
+	if m, ok := s.Models[hwModel]; ok {
+		return m.SupportedOS[0]
+	}
+
+	return "Unsupported"
 }
