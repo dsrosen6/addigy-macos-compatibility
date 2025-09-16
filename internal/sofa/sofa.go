@@ -1,4 +1,4 @@
-package main
+package sofa
 
 import (
 	"context"
@@ -12,17 +12,17 @@ const (
 	sofaDataURL = "https://sofafeed.macadmins.io/v1/macos_data_feed.json"
 )
 
-type macModel struct {
+type MacModel struct {
 	MarketingName string   `json:"MarketingName"`
 	SupportedOS   []string `json:"SupportedOS"`
 	OSVersions    []int    `json:"OSVersions"`
 }
 
-type sofaData struct {
-	Models map[string]macModel `json:"Models"`
+type DataResp struct {
+	Models map[string]MacModel `json:"Models"`
 }
 
-func getSofaData(ctx context.Context, httpClient *http.Client) (*sofaData, error) {
+func GetSofaData(ctx context.Context, httpClient *http.Client) (*DataResp, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sofaDataURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -38,7 +38,7 @@ func getSofaData(ctx context.Context, httpClient *http.Client) (*sofaData, error
 		return nil, fmt.Errorf("reading body: %w", err)
 	}
 
-	data := &sofaData{}
+	data := &DataResp{}
 	if err := json.Unmarshal(body, data); err != nil {
 		return nil, fmt.Errorf("unmarshaling json: %w", err)
 	}
@@ -46,10 +46,11 @@ func getSofaData(ctx context.Context, httpClient *http.Client) (*sofaData, error
 	return data, nil
 }
 
-func getLatestCompatible(s *sofaData, hwModel string) string {
+func GetLatestCompatibleOS(s *DataResp, hwModel string) string {
+	osVer := "Unsupported"
 	if m, ok := s.Models[hwModel]; ok {
 		return m.SupportedOS[0]
 	}
 
-	return "Unsupported"
+	return osVer
 }

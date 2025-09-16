@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+
+	"github.com/dsrosen6/addigy-macos-compatibility/internal/addigy"
+	"github.com/dsrosen6/addigy-macos-compatibility/internal/sofa"
 )
 
 func main() {
@@ -17,33 +21,41 @@ func main() {
 func runReport() error {
 	ctx := context.Background()
 	httpClient := http.DefaultClient
-	addigyClient := newAddigyClient(httpClient, os.Getenv("ADDIGY_API_KEY"))
+	a := addigy.NewAddigyClient(httpClient, os.Getenv("ADDIGY_API_KEY"))
 
-	sofaData, err := getSofaData(ctx, httpClient)
+	sd, err := sofa.GetSofaData(ctx, httpClient)
 	if err != nil {
 		return fmt.Errorf("fetching SOFA data: %w", err)
 	}
 
-	if sofaData == nil {
+	if sd == nil {
 		return fmt.Errorf("received no data from SOFA")
 	}
 
 	params := map[string]any{
-		"per_page": 10,
+		"per_page": 2000,
 	}
 
-	devices, err := addigyClient.getDevices(ctx, params)
+	devices, err := getAndProcessAllDevices(ctx, a, sd, params)
 	if err != nil {
-		return fmt.Errorf("fetching Addigy devices: %w", err)
+		return fmt.Errorf("fetching all devices: %w", err)
 	}
 
-	for _, d := range devices {
-		device, err := addigyClient.processDeviceData(ctx, sofaData, &d)
-		if err != nil {
-			return fmt.Errorf("processing data for device %s: %w", d.name, err)
-		}
-		fmt.Printf("%s - Policy Name: %s, Compatible With: %s\n", device.name, device.policy.Name, device.latestCompatibleOS)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("getting user home directory")
 	}
-	fmt.Printf("Found %d devices\n", len(devices))
+
+	fp := filepath.Join(home, "Downloads/device_compatibility.csv")
+	f, err := os.Create(fp)
+	if err != nil {
+		return fmt.Errorf("creating csv file: %w", err)
+	}
+	defer f.Close()
+
+	if err := devicesToCSV(devices, f); err != nil {
+		return fmt.Errorf("writing data to csv: %w", err)
+	}
+
 	return nil
 }

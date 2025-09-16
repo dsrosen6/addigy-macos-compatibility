@@ -1,0 +1,138 @@
+package addigy
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+const (
+	addigyURL = "https://api.addigy.com/api/v2"
+)
+
+type Policy struct {
+	ID             string  `json:"ID"`
+	ParentPolicyID *string `json:"parent"`
+	Name           string  `json:"name"`
+}
+
+type Device struct {
+	AgentID string                `json:"agentid"`
+	Facts   map[string]DeviceFact `json:"facts"`
+}
+type DeviceFact struct {
+	Value    any    `json:"value"`
+	Type     string `json:"type"`
+	ErrorMsg string `json:"error_msg"`
+}
+
+type Client struct {
+	httpClient *http.Client
+	apiKey     string
+}
+
+type devicesSearchResp struct {
+	Devices  []Device `json:"items"`
+	Metadata metadata `json:"metadata"`
+}
+
+type metadata struct {
+	Page        int `json:"page"`
+	PerPage     int `json:"per_page"`
+	PageCount   int `json:"page_count"`
+	ResultCount int `json:"result_count"`
+	Total       int `json:"total"`
+}
+
+func NewAddigyClient(httpClient *http.Client, apiKey string) *Client {
+	return &Client{
+		httpClient: httpClient,
+		apiKey:     apiKey,
+	}
+}
+
+func (a *Client) SearchDevices(ctx context.Context, params map[string]any) ([]Device, error) {
+	url := fmt.Sprintf("%s/%s", addigyURL, "devices")
+
+	var payload io.Reader
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling params: %w", err)
+		}
+		payload = bytes.NewBuffer(b)
+	}
+
+	devices := &devicesSearchResp{}
+	if err := a.doAPIRequest(ctx, http.MethodPost, url, payload, devices); err != nil {
+		return nil, fmt.Errorf("running API request: %w", err)
+	}
+
+	return devices.Devices, nil
+}
+
+func (a *Client) GetPolicyByID(ctx context.Context, policyID string, allPolicies map[string]Policy) (Policy, error) {
+	if policy, ok := allPolicies[policyID]; ok {
+		return policy, nil
+	}
+
+	url := fmt.Sprintf("%s/%s", addigyURL, "oa/policies/query")
+	params := map[string]any{
+		"policies": []string{policyID},
+	}
+
+	b, err := json.Marshal(params)
+	if err != nil {
+		return Policy{}, fmt.Errorf("marshaling params: %w", err)
+	}
+	payload := bytes.NewBuffer(b)
+
+	var policies []Policy
+	if err := a.doAPIRequest(ctx, http.MethodPost, url, payload, &policies); err != nil {
+		return Policy{}, fmt.Errorf("running API request: %w", err)
+	}
+
+	if len(policies) != 1 {
+		return Policy{}, fmt.Errorf("received unexpected policy total - got %d, expected 1", len(policies))
+	}
+
+	allPolicies[policyID] = policies[0]
+	return allPolicies[policyID], nil
+}
+
+func (a *Client) doAPIRequest(ctx context.Context, method, url string, payload io.Reader, target any) error {
+	req, err := http.NewRequestWithContext(ctx, method, url, payload)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Add("x-api-key", a.apiKey)
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Content-Type", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: status: %d, body: %s", resp.StatusCode, string(body))
+	}
+	if target != nil {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("converting response to bytes: %w", err)
+		}
+
+		if err := json.Unmarshal(body, target); err != nil {
+			return fmt.Errorf("unmarshaling response to json: %w", err)
+		}
+	}
+
+	return nil
+}
