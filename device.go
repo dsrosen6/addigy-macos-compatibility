@@ -42,7 +42,7 @@ func getAndProcessAllDevices(ctx context.Context, a *addigy.Client, sd *sofa.Dat
 		allPolicies = make(map[string]addigy.Policy)
 	)
 
-	addigyDevices, err := a.SearchDevices(ctx, deviceParams)
+	addigyDevices, err := a.SearchDevices(ctx, 200, deviceParams)
 	if err != nil {
 		return nil, fmt.Errorf("getting device data from Addigy: %w", err)
 	}

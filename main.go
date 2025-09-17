@@ -23,6 +23,7 @@ func runReport() error {
 	httpClient := http.DefaultClient
 	a := addigy.NewAddigyClient(httpClient, os.Getenv("ADDIGY_API_KEY"))
 
+	fmt.Println("Fetching SOFA data...")
 	sd, err := sofa.GetSofaData(ctx, httpClient)
 	if err != nil {
 		return fmt.Errorf("fetching SOFA data: %w", err)
@@ -32,11 +33,8 @@ func runReport() error {
 		return fmt.Errorf("received no data from SOFA")
 	}
 
-	params := map[string]any{
-		"per_page": 2000,
-	}
-
-	devices, err := getAndProcessAllDevices(ctx, a, sd, params)
+	fmt.Println("Fetching and processing info from Addigy. This may take a few minutes...")
+	devices, err := getAndProcessAllDevices(ctx, a, sd, nil)
 	if err != nil {
 		return fmt.Errorf("fetching all devices: %w", err)
 	}
@@ -53,9 +51,11 @@ func runReport() error {
 	}
 	defer f.Close()
 
+	fmt.Println("Creating CSV file...")
 	if err := devicesToCSV(devices, f); err != nil {
 		return fmt.Errorf("writing data to csv: %w", err)
 	}
+	fmt.Printf("Done! CSV file available at %s\n", fp)
 
 	return nil
 }

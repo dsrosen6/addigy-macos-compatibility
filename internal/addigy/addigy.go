@@ -54,24 +54,39 @@ func NewAddigyClient(httpClient *http.Client, apiKey string) *Client {
 	}
 }
 
-func (a *Client) SearchDevices(ctx context.Context, params map[string]any) ([]Device, error) {
+func (a *Client) SearchDevices(ctx context.Context, perPage int, baseParams map[string]any) ([]Device, error) {
 	url := fmt.Sprintf("%s/%s", addigyURL, "devices")
+	var devices []Device
+	page := 1
 
-	var payload io.Reader
-	if params != nil {
+	for {
+		params := make(map[string]any)
+		for k, v := range baseParams {
+			params[k] = v
+		}
+		params["page"] = page
+		params["per_page"] = perPage
+
 		b, err := json.Marshal(params)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling params: %w", err)
 		}
-		payload = bytes.NewBuffer(b)
+		payload := bytes.NewBuffer(b)
+
+		resp := &devicesSearchResp{}
+		if err := a.doAPIRequest(ctx, http.MethodPost, url, payload, resp); err != nil {
+			return nil, fmt.Errorf("running api request: %w", err)
+		}
+		devices = append(devices, resp.Devices...)
+
+		if resp.Metadata.Page >= resp.Metadata.PageCount {
+			break
+		}
+
+		page++
 	}
 
-	devices := &devicesSearchResp{}
-	if err := a.doAPIRequest(ctx, http.MethodPost, url, payload, devices); err != nil {
-		return nil, fmt.Errorf("running API request: %w", err)
-	}
-
-	return devices.Devices, nil
+	return devices, nil
 }
 
 func (a *Client) GetPolicyByID(ctx context.Context, policyID string, allPolicies map[string]Policy) (Policy, error) {
@@ -123,6 +138,7 @@ func (a *Client) doAPIRequest(ctx context.Context, method, url string, payload i
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error: status: %d, body: %s", resp.StatusCode, string(body))
 	}
+
 	if target != nil {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
