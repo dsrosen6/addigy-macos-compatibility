@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +23,8 @@ type Device struct {
 }
 
 func RunReport() error {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
+
 	ctx := context.Background()
 	httpClient := http.DefaultClient
 	a := addigy.NewAddigyClient(httpClient, os.Getenv("ADDIGY_API_KEY"))
@@ -87,7 +90,7 @@ func GetAndProcessAllDevices(ctx context.Context, a *addigy.Client, sd *sofa.Dat
 		allPolicies = make(map[string]addigy.Policy)
 	)
 
-	addigyDevices, err := a.SearchDevices(ctx, 200, deviceParams)
+	addigyDevices, err := a.SearchDevices(ctx, 100, deviceParams)
 	if err != nil {
 		return nil, fmt.Errorf("getting Device data from Addigy: %w", err)
 	}
@@ -109,12 +112,13 @@ func processDeviceData(ctx context.Context, a *addigy.Client, ad *addigy.Device,
 	if !ok {
 		d.PolicyName = "N/A"
 	} else {
-		p, err := a.GetPolicyByID(ctx, policyID, allPolicies)
+		p, err := GetPolicyByID(ctx, a, policyID, allPolicies)
 		if err != nil {
+			slog.Error("getting policy by id", "policy_id", policyID, "error", err)
 			d.PolicyName = "ERROR"
+		} else {
+			d.PolicyName = p.Name
 		}
-
-		d.PolicyName = p.Name
 	}
 
 	if d.Name, ok = ad.Facts["device_name"].Value.(string); !ok {
@@ -127,4 +131,31 @@ func processDeviceData(ctx context.Context, a *addigy.Client, ad *addigy.Device,
 
 	d.LatestCompatibleOS = sofa.GetLatestCompatibleOS(sd, d.HardwareModel)
 	return *d
+}
+
+func GetPolicyByID(ctx context.Context, a *addigy.Client, policyID string, allPolicies map[string]addigy.Policy) (addigy.Policy, error) {
+	if policy, ok := allPolicies[policyID]; ok {
+		slog.Debug("cache hit for policy", "policy_id", policy.ID, "policy_name", policy.Name)
+		return policy, nil
+	}
+	slog.Debug("cache miss for policy", "policy_id", policyID)
+
+	params := map[string]any{
+		"policies": []string{policyID},
+	}
+
+	fmt.Println("searching for policy:", policyID)
+	policies, err := a.SearchPolicies(ctx, params)
+	if err != nil {
+		return addigy.Policy{}, fmt.Errorf("searching addigy policies: %w", err)
+	}
+	fmt.Println("policy search result:", policies)
+
+	if len(policies) != 1 {
+		return addigy.Policy{}, fmt.Errorf("received unexpected policy total - got %d, expected 1", len(policies))
+	}
+
+	allPolicies[policyID] = policies[0]
+	slog.Debug("added policy to cache", "policy_id", policyID, "cache_size", len(allPolicies))
+	return allPolicies[policyID], nil
 }

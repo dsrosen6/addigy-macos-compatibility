@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 )
 
@@ -78,6 +79,7 @@ func (a *Client) SearchDevices(ctx context.Context, perPage int, baseParams map[
 			return nil, fmt.Errorf("running api request: %w", err)
 		}
 		devices = append(devices, resp.Devices...)
+		slog.Debug("got batch of devices from addigy", "new_devices", len(resp.Devices), "total_devices", len(devices))
 
 		if resp.Metadata.Page >= resp.Metadata.PageCount {
 			break
@@ -89,33 +91,21 @@ func (a *Client) SearchDevices(ctx context.Context, perPage int, baseParams map[
 	return devices, nil
 }
 
-func (a *Client) GetPolicyByID(ctx context.Context, policyID string, allPolicies map[string]Policy) (Policy, error) {
-	if policy, ok := allPolicies[policyID]; ok {
-		return policy, nil
-	}
-
+func (a *Client) SearchPolicies(ctx context.Context, params map[string]any) ([]Policy, error) {
 	url := fmt.Sprintf("%s/%s", addigyURL, "oa/policies/query")
-	params := map[string]any{
-		"policies": []string{policyID},
-	}
 
 	b, err := json.Marshal(params)
 	if err != nil {
-		return Policy{}, fmt.Errorf("marshaling params: %w", err)
+		return nil, fmt.Errorf("marshaling params: %w", err)
 	}
 	payload := bytes.NewBuffer(b)
 
 	var policies []Policy
 	if err := a.doAPIRequest(ctx, http.MethodPost, url, payload, &policies); err != nil {
-		return Policy{}, fmt.Errorf("running API request: %w", err)
+		return nil, fmt.Errorf("running api request: %w", err)
 	}
 
-	if len(policies) != 1 {
-		return Policy{}, fmt.Errorf("received unexpected policy total - got %d, expected 1", len(policies))
-	}
-
-	allPolicies[policyID] = policies[0]
-	return allPolicies[policyID], nil
+	return policies, nil
 }
 
 func (a *Client) doAPIRequest(ctx context.Context, method, url string, payload io.Reader, target any) error {
