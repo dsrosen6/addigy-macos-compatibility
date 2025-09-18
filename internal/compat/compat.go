@@ -8,11 +8,29 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/dsrosen6/addigy-macos-compatibility/internal/addigy"
 	"github.com/dsrosen6/addigy-macos-compatibility/internal/sofa"
 )
+
+var (
+	sofaData    *sofa.Data
+	allPolicies = make(map[string]addigy.Policy)
+)
+
+type Options struct {
+	Debug               bool
+	AddigyAPIKey        string
+	FilePath            string
+	IncludedOSVersions  []string
+	IncludedPolicyNames []string
+}
+
+type Client struct {
+	httpClient   *http.Client
+	addigyClient *addigy.Client
+	opts         Options
+}
 
 type Device struct {
 	AgentID            string `json:"agentid"`
@@ -22,51 +40,91 @@ type Device struct {
 	LatestCompatibleOS string `json:"latest_compatible"`
 }
 
-func RunReport() error {
-	slog.SetLogLoggerLevel(slog.LevelDebug)
+func Run(opts Options) error {
+	var (
+		err error
+	)
 
 	ctx := context.Background()
-	httpClient := http.DefaultClient
-	a := addigy.NewAddigyClient(httpClient, os.Getenv("ADDIGY_API_KEY"))
+
+	c := newClient(opts)
+	if c.opts.Debug {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 
 	fmt.Println("Fetching SOFA data...")
-	sd, err := sofa.GetSofaData(ctx, httpClient)
+	sofaData, err = sofa.GetSofaData(ctx, c.httpClient)
 	if err != nil {
 		return fmt.Errorf("fetching SOFA data: %w", err)
 	}
 
-	if sd == nil {
+	if sofaData == nil {
 		return fmt.Errorf("received no data from SOFA")
 	}
 
+	if len(c.opts.IncludedPolicyNames) > 0 || len(c.opts.IncludedOSVersions) > 0 {
+		if err := c.runReportWithOptions(ctx); err != nil {
+			return fmt.Errorf("running report with options: %w", err)
+		}
+	} else {
+		if err := c.runFullReport(ctx); err != nil {
+			return fmt.Errorf("running full report: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func newClient(opts Options) *Client {
+	h := http.DefaultClient
+	return &Client{
+		httpClient:   h,
+		addigyClient: addigy.NewAddigyClient(h, opts.AddigyAPIKey),
+		opts:         opts,
+	}
+}
+
+func (c *Client) runFullReport(ctx context.Context) error {
 	fmt.Println("Fetching and processing info from Addigy. This may take a few minutes...")
-	devices, err := GetAndProcessAllDevices(ctx, a, sd, nil)
+	devices, err := c.getAndProcessDevices(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("fetching all devices: %w", err)
+		return fmt.Errorf("getting and processing all devices: %w", err)
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("getting user home directory")
-	}
-
-	fp := filepath.Join(home, "Downloads/device_compatibility.csv")
-	f, err := os.Create(fp)
+	fmt.Println("Creating CSV file...")
+	f, err := os.Create(c.opts.FilePath)
 	if err != nil {
 		return fmt.Errorf("creating csv file: %w", err)
 	}
 	defer f.Close()
 
-	fmt.Println("Creating CSV file...")
-	if err := DevicesToCSV(devices, f); err != nil {
-		return fmt.Errorf("writing data to csv: %w", err)
+	if err := devicesToCSV(devices, f); err != nil {
+		return fmt.Errorf("writing data to CSV: %w", err)
 	}
-	fmt.Printf("Done! CSV file available at %s\n", fp)
+	fmt.Println("Done! CSV file available at:", c.opts.FilePath)
 
 	return nil
 }
 
-func DevicesToCSV(devices []Device, w io.Writer) error {
+func (c *Client) runReportWithOptions(ctx context.Context) error {
+	params := make(map[string]any)
+	if len(c.opts.IncludedPolicyNames) > 0 {
+		// get policies by name
+		policyIDs, err := c.addigyClient.GetPolicyIDsByName(ctx, c.opts.IncludedPolicyNames)
+		if err != nil {
+			return fmt.Errorf("getting policies: %w", err)
+		}
+		//TODO: add policy ids param
+	}
+
+	devices, err := c.getAndProcessDevices(ctx, params)
+	if err != nil {
+		return fmt.Errorf("getting and processing devices: %w", err)
+	}
+	
+}
+
+func devicesToCSV(devices []Device, w io.Writer) error {
 	writer := csv.NewWriter(w)
 
 	if err := writer.Write([]string{"Agent ID", "Name", "Hardware Model", "Policy Name", "Latest Compatible OS"}); err != nil {
@@ -84,26 +142,22 @@ func DevicesToCSV(devices []Device, w io.Writer) error {
 	return writer.Error()
 }
 
-func GetAndProcessAllDevices(ctx context.Context, a *addigy.Client, sd *sofa.DataResp, deviceParams map[string]any) ([]Device, error) {
-	var (
-		allDevices  []Device
-		allPolicies = make(map[string]addigy.Policy)
-	)
-
-	addigyDevices, err := a.SearchDevices(ctx, 100, deviceParams)
+func (c *Client) getAndProcessDevices(ctx context.Context, deviceParams map[string]any) ([]Device, error) {
+	var allDevices []Device
+	addigyDevices, err := c.addigyClient.SearchDevices(ctx, 100, deviceParams)
 	if err != nil {
 		return nil, fmt.Errorf("getting Device data from Addigy: %w", err)
 	}
 
 	for _, d := range addigyDevices {
-		dev := processDeviceData(ctx, a, &d, sd, allPolicies)
+		dev := c.processDeviceData(ctx, &d)
 		allDevices = append(allDevices, dev)
 	}
 
 	return allDevices, nil
 }
 
-func processDeviceData(ctx context.Context, a *addigy.Client, ad *addigy.Device, sd *sofa.DataResp, allPolicies map[string]addigy.Policy) Device {
+func (c *Client) processDeviceData(ctx context.Context, ad *addigy.Device) Device {
 	d := &Device{
 		AgentID: ad.AgentID,
 	}
@@ -112,7 +166,7 @@ func processDeviceData(ctx context.Context, a *addigy.Client, ad *addigy.Device,
 	if !ok {
 		d.PolicyName = "N/A"
 	} else {
-		p, err := GetPolicyByID(ctx, a, policyID, allPolicies)
+		p, err := c.getPolicyByID(ctx, policyID)
 		if err != nil {
 			slog.Error("getting policy by id", "policy_id", policyID, "error", err)
 			d.PolicyName = "ERROR"
@@ -129,11 +183,11 @@ func processDeviceData(ctx context.Context, a *addigy.Client, ad *addigy.Device,
 		d.HardwareModel = "N/A"
 	}
 
-	d.LatestCompatibleOS = sofa.GetLatestCompatibleOS(sd, d.HardwareModel)
+	d.LatestCompatibleOS = sofa.GetLatestCompatibleOS(sofaData, d.HardwareModel)
 	return *d
 }
 
-func GetPolicyByID(ctx context.Context, a *addigy.Client, policyID string, allPolicies map[string]addigy.Policy) (addigy.Policy, error) {
+func (c *Client) getPolicyByID(ctx context.Context, policyID string) (addigy.Policy, error) {
 	if policy, ok := allPolicies[policyID]; ok {
 		slog.Debug("cache hit for policy", "policy_id", policy.ID, "policy_name", policy.Name)
 		return policy, nil
@@ -145,7 +199,7 @@ func GetPolicyByID(ctx context.Context, a *addigy.Client, policyID string, allPo
 	}
 
 	fmt.Println("searching for policy:", policyID)
-	policies, err := a.SearchPolicies(ctx, params)
+	policies, err := c.addigyClient.SearchPolicies(ctx, params)
 	if err != nil {
 		return addigy.Policy{}, fmt.Errorf("searching addigy policies: %w", err)
 	}

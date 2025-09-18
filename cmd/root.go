@@ -10,7 +10,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use: "mac-compat",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return compat.RunReport()
+		return compat.Run()
 	},
 }
 

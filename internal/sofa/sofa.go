@@ -18,11 +18,11 @@ type MacModel struct {
 	OSVersions    []int    `json:"OSVersions"`
 }
 
-type DataResp struct {
+type Data struct {
 	Models map[string]MacModel `json:"Models"`
 }
 
-func GetSofaData(ctx context.Context, httpClient *http.Client) (*DataResp, error) {
+func GetSofaData(ctx context.Context, httpClient *http.Client) (*Data, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sofaDataURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -38,7 +38,7 @@ func GetSofaData(ctx context.Context, httpClient *http.Client) (*DataResp, error
 		return nil, fmt.Errorf("reading body: %w", err)
 	}
 
-	data := &DataResp{}
+	data := &Data{}
 	if err := json.Unmarshal(body, data); err != nil {
 		return nil, fmt.Errorf("unmarshaling json: %w", err)
 	}
@@ -46,7 +46,7 @@ func GetSofaData(ctx context.Context, httpClient *http.Client) (*DataResp, error
 	return data, nil
 }
 
-func GetLatestCompatibleOS(s *DataResp, hwModel string) string {
+func GetLatestCompatibleOS(s *Data, hwModel string) string {
 	osVer := "Unsupported"
 	if m, ok := s.Models[hwModel]; ok {
 		return m.SupportedOS[0]

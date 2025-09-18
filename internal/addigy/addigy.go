@@ -91,6 +91,31 @@ func (a *Client) SearchDevices(ctx context.Context, perPage int, baseParams map[
 	return devices, nil
 }
 
+func (a *Client) GetPolicyIDsByName(ctx context.Context, policyNames []string) ([]string, error) {
+	// get all policies
+	policies, err := a.SearchPolicies(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting all policies: %w", err)
+	}
+
+	var policyIDs []string
+	for _, name := range policyNames {
+		found := false
+		for _, policy := range policies {
+			if policy.Name == name {
+				found = true
+				policyIDs = append(policyIDs, policy.ID)
+				break
+			}
+		}
+		if !found {
+			fmt.Printf("Could not find a policy by the name of %s - please check your spelling\n", name)
+		}
+	}
+
+	return policyIDs, nil
+}
+
 func (a *Client) SearchPolicies(ctx context.Context, params map[string]any) ([]Policy, error) {
 	url := fmt.Sprintf("%s/%s", addigyURL, "oa/policies/query")
 
