@@ -3,11 +3,15 @@ package compat
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/dsrosen6/addigy-macos-compatibility/internal/addigy"
 	"github.com/dsrosen6/addigy-macos-compatibility/internal/sofa"
@@ -22,7 +26,7 @@ type Options struct {
 	Debug               bool
 	AddigyAPIKey        string
 	FilePath            string
-	IncludedOSVersions  []string
+	IncludedOSVersions  []int
 	IncludedPolicyNames []string
 }
 
@@ -37,7 +41,7 @@ type Device struct {
 	Name               string `json:"name"`
 	HardwareModel      string `json:"hardware_model"`
 	PolicyName         string `json:"policy_name"`
-	LatestCompatibleOS string `json:"latest_compatible"`
+	LatestCompatibleOS int    `json:"latest_compatible"`
 }
 
 func Run(opts Options) error {
@@ -62,14 +66,8 @@ func Run(opts Options) error {
 		return fmt.Errorf("received no data from SOFA")
 	}
 
-	if len(c.opts.IncludedPolicyNames) > 0 || len(c.opts.IncludedOSVersions) > 0 {
-		if err := c.runReportWithOptions(ctx); err != nil {
-			return fmt.Errorf("running report with options: %w", err)
-		}
-	} else {
-		if err := c.runFullReport(ctx); err != nil {
-			return fmt.Errorf("running full report: %w", err)
-		}
+	if err := c.runMaxOSReport(ctx); err != nil {
+		return fmt.Errorf("running full report: %w", err)
 	}
 
 	return nil
@@ -84,14 +82,20 @@ func newClient(opts Options) *Client {
 	}
 }
 
-func (c *Client) runFullReport(ctx context.Context) error {
+func (c *Client) runMaxOSReport(ctx context.Context) error {
 	fmt.Println("Fetching and processing info from Addigy. This may take a few minutes...")
-	devices, err := c.getAndProcessDevices(ctx, nil)
+	devices, err := c.getAndProcessDevices(ctx)
 	if err != nil {
-		return fmt.Errorf("getting and processing all devices: %w", err)
+		return fmt.Errorf("getting and processind devices: %w", err)
+	}
+
+	if len(c.opts.IncludedOSVersions) > 0 {
+		fmt.Println("Filtering by OS version(s):", c.opts.IncludedOSVersions)
+		devices = filterDevicesByMaxOS(devices, c.opts.IncludedOSVersions)
 	}
 
 	fmt.Println("Creating CSV file...")
+
 	f, err := os.Create(c.opts.FilePath)
 	if err != nil {
 		return fmt.Errorf("creating csv file: %w", err)
@@ -106,45 +110,35 @@ func (c *Client) runFullReport(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) runReportWithOptions(ctx context.Context) error {
+func (c *Client) getAndProcessDevices(ctx context.Context) ([]Device, error) {
 	params := make(map[string]any)
 	if len(c.opts.IncludedPolicyNames) > 0 {
 		// get policies by name
+		fmt.Println("Filtering by policies:", strings.Join(c.opts.IncludedPolicyNames, ", "))
 		policyIDs, err := c.addigyClient.GetPolicyIDsByName(ctx, c.opts.IncludedPolicyNames)
 		if err != nil {
-			return fmt.Errorf("getting policies: %w", err)
+			return nil, fmt.Errorf("getting policies: %w", err)
 		}
-		//TODO: add policy ids param
-	}
 
-	devices, err := c.getAndProcessDevices(ctx, params)
-	if err != nil {
-		return fmt.Errorf("getting and processing devices: %w", err)
-	}
-	
-}
+		if len(policyIDs) == 0 {
+			return nil, errors.New("did not find any policies")
+		}
 
-func devicesToCSV(devices []Device, w io.Writer) error {
-	writer := csv.NewWriter(w)
+		f := addigy.DeviceSearchFilter{
+			AuditField: "policy_ids",
+			Operation:  "contains",
+			Type:       "list",
+			Value:      policyIDs,
+		}
 
-	if err := writer.Write([]string{"Agent ID", "Name", "Hardware Model", "Policy Name", "Latest Compatible OS"}); err != nil {
-		return fmt.Errorf("writing headers: %w", err)
-	}
-
-	for _, d := range devices {
-		record := []string{d.AgentID, d.Name, d.HardwareModel, d.PolicyName, d.LatestCompatibleOS}
-
-		if err := writer.Write(record); err != nil {
-			return fmt.Errorf("writing record: %w", err)
+		params["query"] = addigy.DeviceSearchPayload{
+			Filters: []addigy.DeviceSearchFilter{f},
 		}
 	}
-	writer.Flush()
-	return writer.Error()
-}
 
-func (c *Client) getAndProcessDevices(ctx context.Context, deviceParams map[string]any) ([]Device, error) {
+	slog.Debug("device search params", "params", params)
 	var allDevices []Device
-	addigyDevices, err := c.addigyClient.SearchDevices(ctx, 100, deviceParams)
+	addigyDevices, err := c.addigyClient.SearchDevices(ctx, 100, params)
 	if err != nil {
 		return nil, fmt.Errorf("getting Device data from Addigy: %w", err)
 	}
@@ -168,7 +162,7 @@ func (c *Client) processDeviceData(ctx context.Context, ad *addigy.Device) Devic
 	} else {
 		p, err := c.getPolicyByID(ctx, policyID)
 		if err != nil {
-			slog.Error("getting policy by id", "policy_id", policyID, "error", err)
+			slog.Debug("getting policy by id", "policy_id", policyID, "error", err)
 			d.PolicyName = "ERROR"
 		} else {
 			d.PolicyName = p.Name
@@ -198,12 +192,10 @@ func (c *Client) getPolicyByID(ctx context.Context, policyID string) (addigy.Pol
 		"policies": []string{policyID},
 	}
 
-	fmt.Println("searching for policy:", policyID)
 	policies, err := c.addigyClient.SearchPolicies(ctx, params)
 	if err != nil {
 		return addigy.Policy{}, fmt.Errorf("searching addigy policies: %w", err)
 	}
-	fmt.Println("policy search result:", policies)
 
 	if len(policies) != 1 {
 		return addigy.Policy{}, fmt.Errorf("received unexpected policy total - got %d, expected 1", len(policies))
@@ -212,4 +204,40 @@ func (c *Client) getPolicyByID(ctx context.Context, policyID string) (addigy.Pol
 	allPolicies[policyID] = policies[0]
 	slog.Debug("added policy to cache", "policy_id", policyID, "cache_size", len(allPolicies))
 	return allPolicies[policyID], nil
+}
+
+func filterDevicesByMaxOS(devices []Device, osVersions []int) []Device {
+	var filtered []Device
+	for _, d := range devices {
+		if slices.Contains(osVersions, d.LatestCompatibleOS) {
+			filtered = append(filtered, d)
+			slog.Debug("adding device to filtered list", "device_name", d.Name, "max_os", d.LatestCompatibleOS)
+		} else {
+			slog.Debug("device does not match max os filter", "device_name", d.Name, "max_os", d.LatestCompatibleOS)
+		}
+	}
+
+	return filtered
+}
+
+func devicesToCSV(devices []Device, w io.Writer) error {
+	writer := csv.NewWriter(w)
+
+	if err := writer.Write([]string{"Agent ID", "Name", "Hardware Model", "Policy Name", "Latest Compatible OS"}); err != nil {
+		return fmt.Errorf("writing headers: %w", err)
+	}
+
+	for _, d := range devices {
+		osVers := strconv.Itoa(d.LatestCompatibleOS)
+		if osVers == "0" {
+			osVers = "Unsupported"
+		}
+
+		record := []string{d.AgentID, d.Name, d.HardwareModel, d.PolicyName, osVers}
+		if err := writer.Write(record); err != nil {
+			return fmt.Errorf("writing record: %w", err)
+		}
+	}
+	writer.Flush()
+	return writer.Error()
 }

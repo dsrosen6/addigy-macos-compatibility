@@ -46,10 +46,10 @@ func GetSofaData(ctx context.Context, httpClient *http.Client) (*Data, error) {
 	return data, nil
 }
 
-func GetLatestCompatibleOS(s *Data, hwModel string) string {
-	osVer := "Unsupported"
+func GetLatestCompatibleOS(s *Data, hwModel string) int {
+	osVer := 0
 	if m, ok := s.Models[hwModel]; ok {
-		return m.SupportedOS[0]
+		return m.OSVersions[0]
 	}
 
 	return osVer

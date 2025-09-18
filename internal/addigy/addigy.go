@@ -15,7 +15,7 @@ const (
 )
 
 type Policy struct {
-	ID             string  `json:"ID"`
+	ID             string  `json:"policyId"`
 	ParentPolicyID *string `json:"parent"`
 	Name           string  `json:"name"`
 }
@@ -33,6 +33,17 @@ type DeviceFact struct {
 type Client struct {
 	httpClient *http.Client
 	apiKey     string
+}
+
+type DeviceSearchPayload struct {
+	Filters []DeviceSearchFilter `json:"filters"`
+}
+
+type DeviceSearchFilter struct {
+	AuditField string `json:"audit_field"`
+	Operation  string `json:"operation"`
+	Type       string `json:"type"`
+	Value      any    `json:"value"`
 }
 
 type devicesSearchResp struct {
@@ -73,6 +84,7 @@ func (a *Client) SearchDevices(ctx context.Context, perPage int, baseParams map[
 			return nil, fmt.Errorf("marshaling params: %w", err)
 		}
 		payload := bytes.NewBuffer(b)
+		slog.Debug("json payload", "payload", payload)
 
 		resp := &devicesSearchResp{}
 		if err := a.doAPIRequest(ctx, http.MethodPost, url, payload, resp); err != nil {
@@ -104,6 +116,7 @@ func (a *Client) GetPolicyIDsByName(ctx context.Context, policyNames []string) (
 		for _, policy := range policies {
 			if policy.Name == name {
 				found = true
+				slog.Debug("found policy by name", "policy_name", name, "policy_id", policy.ID)
 				policyIDs = append(policyIDs, policy.ID)
 				break
 			}
